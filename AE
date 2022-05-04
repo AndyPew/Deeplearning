@@ -13,216 +13,58 @@ from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms
 import torch.optim as optim
 import torchvision
+import numpy as np
 import imageio
 import rawpy
 import sys
-import os
 
 
 
-class BaseVAE(nn.Module):
+class denoising_model(nn.Module):
+  def __init__(self):
+    super(denoising_model,self).__init__()
+    self.encoder=nn.Sequential(
+                  nn.Linear(28*28,256),
+                  nn.ReLU(True),
+                  nn.Linear(256,128),
+                  nn.ReLU(True),
+                  nn.Linear(128,64),
+                  nn.ReLU(True)
+        
+                  )
     
-    def __init__(self) -> None:
-        super(BaseVAE, self).__init__()
-
-    def encode(self, input: Tensor) -> List[Tensor]:
-        raise NotImplementedError
-
-    def decode(self, input: Tensor) -> Any:
-        raise NotImplementedError
-
-    def sample(self, batch_size:int, current_device: int, **kwargs) -> Tensor:
-        raise NotImplementedError
-
-    def generate(self, x: Tensor, **kwargs) -> Tensor:
-        raise NotImplementedError
-
-    @abstractmethod
-    def forward(self, *inputs: Tensor) -> Tensor:
-        pass
-
-    @abstractmethod
-    def loss_function(self, *inputs: Any, **kwargs) -> Tensor:
-        pass
-
-
-
-
-
-class VanillaVAE(BaseVAE):
-
-
-    def __init__(self,
-                 in_channels: int,
-                 latent_dim: int,
-                 hidden_dims: List = None,
-                 **kwargs) -> None:
-        super(VanillaVAE, self).__init__()
-
-        self.latent_dim = latent_dim
-
-        modules = []
-        if hidden_dims is None:
-            hidden_dims = [32, 64, 128, 256, 512]
-
-        # Build Encoder
-        for h_dim in hidden_dims:
-            modules.append(
-                nn.Sequential(
-                    nn.Conv2d(in_channels, out_channels=h_dim,
-                              kernel_size= 3, stride= 2, padding  = 1),
-                    nn.BatchNorm2d(h_dim),
-                    nn.LeakyReLU())
-            )
-            in_channels = h_dim
-
-        self.encoder = nn.Sequential(*modules)
-        self.fc_mu = nn.Linear(hidden_dims[-1]*4, latent_dim)
-        self.fc_var = nn.Linear(hidden_dims[-1]*4, latent_dim)
-
-
-        # Build Decoder
-        modules = []
-
-        self.decoder_input = nn.Linear(latent_dim, hidden_dims[-1] * 4)
-
-        hidden_dims.reverse()
-
-        for i in range(len(hidden_dims) - 1):
-            modules.append(
-                nn.Sequential(
-                    nn.ConvTranspose2d(hidden_dims[i],
-                                       hidden_dims[i + 1],
-                                       kernel_size=3,
-                                       stride = 2,
-                                       padding=1,
-                                       output_padding=1),
-                    nn.BatchNorm2d(hidden_dims[i + 1]),
-                    nn.LeakyReLU())
-            )
-
-
-
-        self.decoder = nn.Sequential(*modules)
-
-        self.final_layer = nn.Sequential(
-                            nn.ConvTranspose2d(hidden_dims[-1],
-                                               hidden_dims[-1],
-                                               kernel_size=3,
-                                               stride=2,
-                                               padding=1,
-                                               output_padding=1),
-                            nn.BatchNorm2d(hidden_dims[-1]),
-                            nn.LeakyReLU(),
-                            nn.Conv2d(hidden_dims[-1], out_channels= 3,
-                                      kernel_size= 3, padding= 1),
-                            nn.Tanh())
-
-    def encode(self, input: Tensor) -> List[Tensor]:
-        """
-        Encodes the input by passing through the encoder network
-        and returns the latent codes.
-        :param input: (Tensor) Input tensor to encoder [N x C x H x W]
-        :return: (Tensor) List of latent codes
-        """
-        result = self.encoder(input)
-        result = torch.flatten(result, start_dim=1)
-
-        # Split the result into mu and var components
-        # of the latent Gaussian distribution
-        mu = self.fc_mu(result)
-        log_var = self.fc_var(result)
-
-        return [mu, log_var]
-
-    def decode(self, z: Tensor) -> Tensor:
-        """
-        Maps the given latent codes
-        onto the image space.
-        :param z: (Tensor) [B x D]
-        :return: (Tensor) [B x C x H x W]
-        """
-        result = self.decoder_input(z)
-        result = result.view(-1, 512, 2, 2)
-        result = self.decoder(result)
-        result = self.final_layer(result)
-        return result
-
-    def reparameterize(self, mu: Tensor, logvar: Tensor) -> Tensor:
-        """
-        Reparameterization trick to sample from N(mu, var) from
-        N(0,1).
-        :param mu: (Tensor) Mean of the latent Gaussian [B x D]
-        :param logvar: (Tensor) Standard deviation of the latent Gaussian [B x D]
-        :return: (Tensor) [B x D]
-        """
-        std = torch.exp(0.5 * logvar)
-        eps = torch.randn_like(std)
-        return eps * std + mu
-
-    def forward(self, input: Tensor, **kwargs) -> List[Tensor]:
-        mu, log_var = self.encode(input)
-        z = self.reparameterize(mu, log_var)
-        return  [self.decode(z), mu, log_var]
-        
-        
-    def sample(self,
-               num_samples:int,
-               current_device: int, **kwargs) -> Tensor:
-        """
-        Samples from the latent space and return the corresponding
-        image space map.
-        :param num_samples: (Int) Number of samples
-        :param current_device: (Int) Device to run the model
-        :return: (Tensor)
-        """
-        z = torch.randn(num_samples,
-                        self.latent_dim)
-
-        z = z.to(current_device)
-
-        samples = self.decode(z)
-        return samples
-
-    def generate(self, x: Tensor, **kwargs) -> Tensor:
-        """
-        Given an input image x, returns the reconstructed image
-        :param x: (Tensor) [B x C x H x W]
-        :return: (Tensor) [B x C x H x W]
-        """
-
-        return self.forward(x)[0]
+    self.decoder=nn.Sequential(
+                  nn.Linear(64,128),
+                  nn.ReLU(True),
+                  nn.Linear(128,256),
+                  nn.ReLU(True),
+                  nn.Linear(256,28*28),
+                  nn.Sigmoid(),
+                  )
+    
+ 
+  def forward(self,x):
+    x=self.encoder(x)
+    x=self.decoder(x)
+    
+    return x
+    
     
 def initialize_weights(model):
     for m in model.modules():  
         if isinstance(m, (nn.Conv2d, nn.ConvTranspose2d, nn.BatchNorm2d)):    
             nn.init.normal_(m.weight.data, 0.0, 0.02)   
     
-def loss_function(self,
-                  *args,
-                  **kwargs) -> dict:
-    """
-    Computes the VAE loss function.
-    KL(N(\mu, \sigma), N(0, 1)) = \log \frac{1}{\sigma} + \frac{\sigma^2 + \mu^2}{2} - \frac{1}{2}
-    :param args:
-    :param kwargs:
-    :return:
-    """
-    recons = args[0]
-    input = args[1]
-    mu = args[2]
-    log_var = args[3]
-
-    kld_weight = kwargs['M_N'] # Account for the minibatch samples from the dataset
-    recons_loss =F.mse_loss(recons, input)
+model=denoising_model().to(device)
+criterion=nn.MSELoss()
+optimizer=optim.SGD(model.parameters(),lr=0.01,weight_decay=1e-5)
 
 
-    kld_loss = torch.mean(-0.5 * torch.sum(1 + log_var - mu ** 2 - log_var.exp(), dim = 1), dim = 0)
-
-    loss = recons_loss + kld_weight * kld_loss
-    #return {'loss': loss, 'Reconstruction_Loss':recons_loss.detach(), 'KLD':-kld_loss.detach()}
-    return loss    
-
+epochs=120
+l=len(trainloader)
+losslist=list()
+epochloss=0
+running_loss=0
 
 
 #hyperparameter
@@ -255,40 +97,16 @@ def extract_bayer_channels(raw):
     return ch_R, ch_Gr, ch_B, ch_Gb
 
 
+#Raw data converted to operational data(jpeg)
+file_path = './testset/Hearthstone Screenshot 02-12-21 18.12.55.png'
+dir_path = './1'
+file_list =  os.listdir(dir_path)
 
+for file in file_list:    
+    with rawpy.imread(f'./1/{file}') as raw_image:         
+        rgb = raw_image.postprocess(use_camera_wb=True, no_auto_bright=True, output_bps=16)
+        imageio.imsave(f'./testset/{file}.jpeg', rgb)
 
-
-directory = os.fsencode('./testset')
-    
-for file in os.listdir(directory):
-    file_name = sys.argv[1]
-    
-    print("Converting file " + file_name)
-    
-    raw = rawpy.imread(file)
-    raw_image = raw.raw_image
-    del raw
-
-    raw_image = raw_image.astype(np.float32)
-    ch_R, ch_Gr, ch_B, ch_Gb = extract_bayer_channels(raw_image)
-
-    png_image = raw_image.astype(np.uint16)
-    new_name = raw_file.replace(".dng", ".png")
-    imageio.imwrite(new_name, png_image)
-
-    
-    
-    
-
-
-    
-    
-    
-   
-
-    
-    
-    
 #img = ImageLoader(data_path="./testset", split="train", transform=transforms)
 
 
@@ -311,3 +129,30 @@ for epoch in range(EPOCH):
         loss=backward()
         optim_VAE.step()
         print(f'loss:{loss}')
+
+for epoch in range(epochs):
+  
+  print("Entering Epoch: ",epoch)
+  for dirty,clean,label in tqdm((trainloader)):
+    
+    
+    dirty=dirty.view(dirty.size(0),-1).type(torch.FloatTensor)
+    clean=clean.view(clean.size(0),-1).type(torch.FloatTensor)
+    dirty,clean=dirty.to(device),clean.to(device)
+    
+    
+    
+    #-----------------Forward Pass----------------------
+    output=model(dirty)
+    loss=criterion(output,clean)
+    #-----------------Backward Pass---------------------
+    optimizer.zero_grad()
+    loss.backward()
+    optimizer.step()
+    
+    running_loss+=loss.item()
+    epochloss+=loss.item()
+  #-----------------Log-------------------------------
+  losslist.append(running_loss/l)
+  running_loss=0
+  print("======> epoch: {}/{}, Loss:{}".format(epoch,epochs,loss.item()))
